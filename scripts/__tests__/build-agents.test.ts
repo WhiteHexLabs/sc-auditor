@@ -28,9 +28,9 @@ function collectFiles(dir: string, files: string[] = []): string[] {
 }
 
 describe("build-agents: file generation", () => {
-  it("generates exactly 24 files", () => {
+  it("generates exactly 25 files", () => {
     const files = collectFiles(OUT_DIR);
-    expect(files.length).toBe(24);
+    expect(files.length).toBe(25);
   });
 
   it("generates SKILL.md", () => {
@@ -66,6 +66,21 @@ describe("build-agents: file generation", () => {
     const dir = join(OUT_DIR, "assets", "attack-vectors");
     const files = readdirSync(dir).filter((f) => f.endsWith(".md"));
     expect(files.length).toBe(5);
+  });
+
+  it("generates the findings-index reference", () => {
+    const ref = join(OUT_DIR, "assets", "references", "findings-index.md");
+    expect(existsSync(ref)).toBe(true);
+    const content = readFileSync(ref, "utf-8");
+    expect(content).toContain("whitehexlabs.audit-findings-index/v1");
+  });
+
+  it("SKILL.md reference path points at the .agents copy", () => {
+    const content = readFileSync(join(OUT_DIR, "SKILL.md"), "utf-8");
+    expect(content).toContain(
+      ".agents/skills/security-auditor/assets/references/findings-index.md",
+    );
+    expect(content).not.toMatch(/`skills\/security-auditor\/assets\/references\//);
   });
 
   it("generates all 5 hard-negative files", () => {
