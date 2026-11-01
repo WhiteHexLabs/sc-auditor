@@ -388,13 +388,15 @@ After VERIFY completes, handle DA chain conflicts using the "prove it or lose it
 
 ## Phase 6: REPORT (Inline)
 
-Read `skills/security-auditor/assets/references/findings-index.md` now (not before). Write:
+Read `skills/security-auditor/assets/references/findings-index.md` now (not before). Write the primary report first, then extract the index from it.
 
-1. The full report to `<artifactRoot>/report.md` (five sections below, complete evidence, no truncation).
+1. The full report to `<artifactRoot>/report.md` (five sections below, complete evidence, no truncation). Each indexed finding uses the heading `### local-NNN: <title>`.
 2. The phase timeline to `<artifactRoot>/audit.log`.
-3. The `whitehexlabs.audit-findings-index/v1` index at the path that file specifies.
+3. One YAML file, `<artifactRoot>/findings-index.yaml`, schema `whitehexlabs.audit-findings-index/v1`. Top-level keys are exactly `schema`, `run_id`, `step`, `coverage`, `findings`. Copy `run_id` and `step` from the execution prompt. Evidence `artifact_id` is only `primary-report`. Do not write a JSON index.
 
-Reload findings from `checkpoints/verify-*.json` and `checkpoints/attack-*.json`. Do not use chat copies. Then return only the note from that reference, at most 1600 characters. Do not paste the report, the index, or the log into chat.
+Write no index when `run_id` or `step` is missing, or when a required finding field cannot be copied from the report without guessing. An empty `findings` list is only for a report that states zero findings. Discarded items stay in the report and are not indexed.
+
+Reload findings from `checkpoints/verify-*.json` and `checkpoints/attack-*.json`. Do not use chat copies. Then return only the note from that reference, at most 1600 characters. If there is no index, the note says the finding count is unknown. Do not paste the report, the index, or the log into chat.
 
 Generate the report from the checkpoint files. Five sections:
 

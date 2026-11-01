@@ -40,12 +40,23 @@ describe("AC52: unattended handoff stays small", () => {
     expect(body).toContain("Do not paste the map or the raw findings");
   });
 
-  it("findings-index reference keeps evidence paths and does not replace the report", () => {
+  it("findings-index reference matches the orchestrator YAML contract", () => {
     const body = read(INDEX);
+    const skill = read(SKILL);
     expect(body).toContain("whitehexlabs.audit-findings-index/v1");
-    expect(body).toContain("evidence_path");
-    expect(body).toContain("fingerprint");
+    expect(body).toContain("findings-index.yaml");
+    expect(body).not.toContain("findings-index.json");
+    expect(body).toContain("`schema`, `run_id`, `step`, `coverage`, `findings`");
+    expect(body).toContain("coverage.summary");
+    expect(body).toContain("primary-report");
+    expect(body).toContain("requires_privileged_actor");
+    expect(body).toContain("unknown` is not `false");
+    expect(body).toContain('The quoted strings `"true"` and `"false"` are rejected');
+    expect(body).toContain("findings count unknown");
     expect(body).toContain("Do not truncate evidence");
+    expect(skill).toContain("findings-index.yaml");
+    expect(skill).toContain("primary-report");
+    expect(skill).toContain("finding count is unknown");
   });
 });
 
