@@ -31,12 +31,12 @@ Workflow: **RESUME CHECK -> RESOLVE INPUT -> SETUP -> MAP -> HUNT -> ATTACK -> V
 These rules override ALL other instructions. Violations abort the audit.
 
 1. **STATE MACHINE IS ABSOLUTE**: Follow phases in exact order: RESOLVE -> SETUP -> MAP -> user gate -> HUNT -> user gate -> ATTACK -> VERIFY -> CONFLICT RESOLUTION -> REPORT. NEVER skip, reorder, or combine phases.
-2. **USER GATES ARE BLOCKING**: After MAP and after HUNT, STOP and wait for user input. If the user has not responded, output "WAITING FOR USER CONFIRMATION" and stop. Do NOT auto-advance.
+2. **USER GATES ARE BLOCKING**: After MAP and after HUNT, STOP and wait for user input, unless this is an unattended run (see Unattended runs). If the user has not responded, output "WAITING FOR USER CONFIRMATION" and stop. Do NOT auto-advance an interactive run.
 3. **DELEGATION IS MANDATORY**: For SETUP, MAP, HUNT, ATTACK, and VERIFY, delegate to sub-agents. Do NOT perform audit analysis yourself. Your only jobs: dispatch, collect, validate, present, checkpoint.
 4. **ORCHESTRATOR DOES NOT AUDIT**: If you find yourself reading .sol files to analyze security, STOP. That is a sub-agent's job. The orchestrator reads .sol ONLY for path resolution (Phase 0.5).
 5. **OUTPUT VALIDATION**: Before accepting sub-agent output, verify it matches the expected JSON schema. If malformed: retry ONCE. If retry fails: STOP and ask user.
 6. **FAILURE POLICY**: If a sub-agent fails or stalls: retry ONCE. If retry fails: stop, report to user, ask how to proceed. DO NOT improvise or substitute your own analysis.
-7. **MINIMAL CONTEXT**: When dispatching sub-agents, forward ONLY the inputs listed for that phase. Do NOT forward conversation history, audit intent, or prior phase reasoning.
+7. **MINIMAL CONTEXT**: When dispatching sub-agents, forward ONLY the inputs listed for that phase. Those inputs are paths plus, for ATTACK, the one hotspot object. Do NOT paste a system map, static findings, checklists, source, or prior phase reasoning. Do NOT forward conversation history or audit intent.
 
 ## Sub-Agent Dispatch
 
@@ -47,14 +47,33 @@ Use the `Agent` tool. Specify prompt (read the phase prompt file), inputs (phase
 Your fork message MUST contain ONLY:
 1. "You are the [PHASE] agent. Read [prompt file path] and follow it exactly."
 2. The JSON inputs for this phase
-3. "Return [SchemaName] JSON only. No prose, no markdown fences."
+3. "Write [SchemaName] JSON to the checkpoint path. Return the receipt JSON only. No prose, no markdown fences."
 
 DO NOT include: audit description, conversation history, prior phase outputs, or any additional context.
 
-After fork returns, parse output as JSON. If it doesn't match the expected schema, retry ONCE with a corrective message specifying missing fields.
+After fork returns, parse the receipt JSON. Schema-check the checkpoint file, not the chat text. If the receipt is malformed or the checkpoint is missing required keys, retry ONCE with a corrective message specifying missing fields.
 
 ### Serial fallback
 If neither Agent tool nor fork_context is available, read the prompt file and execute inline sequentially.
+
+## Context budget
+
+Files hold the audit. Chat holds pointers.
+
+- Sub-agents write full artifacts under `.sc-auditor-work/` and return a receipt: `{"phase","checkpoint","count","ids"}`. Reject a chat payload that inlines a system map, raw tool output, or source.
+- `artifactRoot` is `workDir` from the execution prompt when set, otherwise `<rootDir>/.sc-auditor-work`. Pass it through. Do not invent a second copy of the tree.
+- Pass checkpoint paths. Grep a contract, function, or detector instead of reading a whole map, raw findings file, or source tree in the parent.
+- Tool stdout and forge traces go to `.sc-auditor-work/logs/`. Findings keep the evidence for the claim (line ranges, numeric example, the trace excerpt that shows the break) and a `witness_path` to the full log.
+- On an unattended run the final chat message is the Phase 6 return note (at most 1600 characters).
+
+## Unattended runs
+
+Run unattended when the execution prompt sets `unattended: true` or `workflow.gates` to `auto`, or when it asks for a `whitehexlabs.audit-findings-index/v1` index and does not ask you to stop for review.
+
+- MAP gate counts as confirmed. HUNT gate counts as `all` (every hotspot goes to ATTACK; coverage is not narrowed).
+- Record `"gate": "auto"` on those phases in the manifest.
+- Still write every checkpoint before advancing.
+- Interactive runs keep the blocking gates below.
 
 ## Phase Transition Checklist
 
@@ -83,14 +102,13 @@ If ANY condition is unmet: STOP and address it.
 Every sub-agent writes its output to `.sc-auditor-work/checkpoints/<phase>-<id>.json`
 as its FINAL step before returning. The orchestrator also writes, creating a double-save.
 
-### Rule 2: Reload before use
-Before using any prior phase's data, ALWAYS reload it from the checkpoint file —
-never rely on in-context data alone. After compaction, in-context data may be stale or missing.
-Specifically:
-- Before dispatching HUNT agents: reload SystemMapArtifact from `checkpoints/map.json`
-- Before dispatching ATTACK agents: reload hotspots from `checkpoints/hunt.json`
-- Before dispatching VERIFY agents: reload findings from `checkpoints/attack-*.json`
-- Before JUDGE: reload verify results from `checkpoints/verify-*.json`
+### Rule 2: Files are authoritative
+Checkpoint files are the source of truth. Pass paths. Do not paste artifacts into the next prompt.
+- HUNT lanes read `checkpoints/map-slices/<lane>.json` (MAP wrote the slices from `checkpoints/map.json`)
+- The adversarial lane reads `checkpoints/map.json` once, plus the other lanes' hotspot files
+- ATTACK receives one hotspot object and Greps `checkpoints/map.json`
+- VERIFY reads `checkpoints/attack-<id>.json`
+The parent reads a checkpoint only to merge hotspots or to confirm the file exists. After compaction, chat is not a source of truth.
 
 ### Rule 3: Checkpoint before user gates
 Before ANY user interaction (MAP review, HUNT selection), the checkpoint MUST already be written.
@@ -204,16 +222,16 @@ Dispatch a single SETUP Agent via the `Agent` tool.
 
 **Agent instructions:** Tell the agent to read `skills/security-auditor/assets/prompts/setup.md` for its full procedure.
 
-**Agent input:** `rootDir`.
+**Agent input:** `rootDir`, `artifactRoot`, `scopeFiles`.
 
 **Allowed tools:** `Glob`, `Read`, `Bash`, `Write`, `mcp__sc-auditor__run-slither`, `mcp__sc-auditor__run-aderyn`, `mcp__sc-auditor__get_checklist`
 
-**Agent output:** `SetupSummary` JSON (scope, finding counts, topFindings, checklist status). Full raw findings persisted to `.sc-auditor-work/raw/`.
+**Agent output:** receipt JSON. Full SetupSummary is `checkpoints/setup.json`. Full raw findings stay in `.sc-auditor-work/raw/`. Do not read `raw/` or `checklist.json` in the parent.
 
-**Output validation:** Output MUST contain keys: `phase`, `timestamp`, `scope`, `slither`, `aderyn`, `checklist`, `warnings`.
+**Output validation:** The checkpoint file MUST contain keys: `phase`, `timestamp`, `scope`, `slither`, `aderyn`, `checklist`, `warnings`. The receipt only points at that file.
 
 **After SETUP Agent returns:**
-1. Present summary: finding counts by severity per tool, checklist status, solc version.
+1. Present summary from `checkpoints/setup.json`: finding counts by severity per tool, checklist status, solc version. Do not read `.sc-auditor-work/raw/`.
 2. If BOTH tools failed, warn user about manual-only mode. If one fails, note which and continue.
 
 **Checkpoint:** Write `SetupSummary` to `.sc-auditor-work/checkpoints/setup.json`. Update manifest.
@@ -228,19 +246,19 @@ Dispatch a single MAP Agent via the `Agent` tool.
 
 **Agent instructions:** Tell the agent to read `skills/security-auditor/assets/prompts/map.md` for its full procedure.
 
-**Agent input:** `rootDir`, SetupSummary JSON, `rawFindingsDir` = `<rootDir>/.sc-auditor-work/raw/`.
+**Agent input:** `rootDir`, `artifactRoot`, `scopeFiles`, `setupPath` = `<artifactRoot>/checkpoints/setup.json`, `rawFindingsDir` = `<artifactRoot>/raw/`. Do not paste the setup summary.
 
 **Allowed tools:** `Read`, `Glob`, `Grep`
 
-**Agent output:** `SystemMapArtifact` JSON (components, invariants, trust boundaries, AuditUnits).
+**Agent output:** receipt JSON including `cross_contract`. Full SystemMapArtifact is `checkpoints/map.json`. Lane slices are `checkpoints/map-slices/<lane>.json`. Summary is `checkpoints/map-summary.json`.
 
-**Output validation:** Output MUST contain keys: `components`, `external_surfaces`, `protocol_invariants`, `audit_units`.
+**Output validation:** `checkpoints/map.json` MUST contain keys: `components`, `external_surfaces`, `protocol_invariants`, `audit_units`.
 
 **After MAP Agent returns:**
 
 **Checkpoint:** Write `SystemMapArtifact` to `.sc-auditor-work/checkpoints/map.json`. Update manifest.
 
-1. Present the SystemMapArtifact to the user: Components, Invariants, AuditUnits, Trust Boundaries.
+1. Present Components, Invariants, AuditUnits, and Trust Boundaries from `checkpoints/map-summary.json` (names and one-line descriptions). Do not paste `map.json` into chat.
 2. **--- USER GATE (BLOCKING) ---**
    Output: "MAP COMPLETE. Review the system map above. Reply 'confirm' to proceed to HUNT, or provide corrections."
    **HALT. Do NOT execute any further tool calls or phase logic until the user responds.**
@@ -266,24 +284,24 @@ Dispatch all lanes simultaneously via the `Agent` tool. Each agent reads its own
 **Adversarial Deep lane (auto-trigger):** If the SystemMap shows cross-contract interaction patterns (external calls across trust boundaries, delegatecall chains, callback flows, or multi-contract state dependencies), dispatch a 6th agent:
 - Prompt file: `skills/security-auditor/assets/prompts/hunt-adversarial-deep.md`
 - Lane ID: `adversarial_deep`
-- Input: SystemMapArtifact JSON, ALL combined hotspots from the other lanes, ALL static findings
+- Input: `mapPath`, `hotspotPaths` for every other lane (including `economic_differential`), `staticFindingsPaths`, `scopeIndexPath`. The agent reads those files. Do not paste them.
 - This triggers in ANY mode when cross-contract patterns are detected, not only in deep mode.
 
 **Each agent instructions:** Tell the agent to read its prompt file for the full procedure.
 
-**Each agent input:** `rootDir`, SystemMapArtifact JSON, static findings JSON.
+**Each agent input:** `rootDir`, `artifactRoot`, `slicePath` = `checkpoints/map-slices/<lane>.json`, `laneFiles` from that slice, `scopeIndexPath`, `mapPath`, `staticFindingsPaths`. Do not paste the map or the raw findings.
 
-**Each agent output:** `Hotspot[]` JSON array.
+**Each agent output:** receipt JSON. The checkpoint file is the `Hotspot[]`.
 
-**Output validation:** Output MUST be a JSON array where each element has: `id`, `lane`, `title`, `priority`, `affected_files`.
+**Output validation:** The checkpoint file MUST be a JSON array where each element has: `id`, `lane`, `title`, `priority`, `affected_files`.
 
 **Allowed tools per agent:** `Read`, `Glob`, `Grep`, `Write`, `mcp__sc-auditor__search_findings` (only after local anchor)
 
-**AuditUnit sweep:** Assign unscored AuditUnits from the SystemMap to lanes based on characteristics: callback/reentrancy units to `callback_liveness`, arithmetic/balance units to `accounting_entitlement`, oracle/token units to `token_oracle_statefulness`, value-flow units to `economic_differential`, remainder to `semantic_consistency`.
+**AuditUnit sweep:** MAP writes the lane slices. Assignment is unchanged: callback/reentrancy units to `callback_liveness`, arithmetic/balance units to `accounting_entitlement`, oracle/token units to `token_oracle_statefulness`, value-flow units to `economic_differential`, remainder to `semantic_consistency`. A unit that matches several characteristics is copied into each matching slice. The parent dispatches `slicePath` and does not re-read `map.json` to assign units.
 
 ### Step 2 -- Merge, Deduplicate, Rank
 
-If any lane agent outputs are missing from context (e.g., after compaction), reload from `.sc-auditor-work/checkpoints/hunt-<lane_id>.json`.
+Load every lane from `.sc-auditor-work/checkpoints/hunt-<lane_id>.json`. Do not use the receipt as the hotspot list.
 
 Combine hotspots from all lanes. Deduplicate by `(contract, function, state_vars, invariant, fix_shape)` -- NOT by `root_cause_hypothesis` alone. Rank: critical > high > medium > low.
 
@@ -306,13 +324,13 @@ Dispatch one ATTACK Agent per user-selected hotspot, in parallel via the `Agent`
 
 **Agent instructions:** Tell the agent to read `skills/security-auditor/assets/prompts/attack.md` for its full procedure. The agent MUST run the DA protocol FIRST (Step 3) before building attack narrative or proof.
 
-**Each agent input:** `rootDir`, hotspot JSON, SystemMapArtifact JSON.
+**Each agent input:** `rootDir`, `artifactRoot`, the one hotspot JSON, `mapPath`, `scopeIndexPath`. Do not paste the system map.
 
 **Allowed tools:** `Read`, `Glob`, `Grep`, `Write`, `Edit`, `Bash`, `mcp__sc-auditor__generate-foundry-poc`, `mcp__sc-auditor__run-echidna`, `mcp__sc-auditor__run-medusa`, `mcp__sc-auditor__run-halmos`, `mcp__sc-auditor__search_findings`
 
-**Each agent output:** A `Finding` JSON object with `status = "candidate"` or `status = "invalidated_by_attack"`. The `da_attack` field MUST be populated.
+**Each agent output:** receipt JSON. The checkpoint is a `Finding` with `status = "candidate"` or `status = "invalidated_by_attack"`. The `da_attack` field MUST be populated. Forge and fuzzer logs go to `.sc-auditor-work/logs/`.
 
-**Output validation:** Output MUST contain keys: `title`, `severity`, `status`, `da_attack`, `exploit_sketch`.
+**Output validation:** The checkpoint file MUST contain keys: `title`, `severity`, `status`, `da_attack`, `exploit_sketch`.
 
 **Mandatory proof requirement:** Each ATTACK agent MUST attempt at least one proof method for confirmed vulnerabilities (see `attack.md`). Findings without proof stay `status = "candidate"`, `proof_type = "none"`.
 
@@ -330,13 +348,13 @@ Dispatch one VERIFY Agent per finding, including `invalidated_by_attack` finding
 
 **Agent instructions:** Tell the agent to read `skills/security-auditor/assets/prompts/skeptic.md` and `skills/security-auditor/assets/prompts/judge.md` for its full procedure. The skeptic runs the formal DA protocol with inversion mandate.
 
-**Each agent input:** Finding JSON (with `da_attack` field), SystemMapArtifact JSON.
+**Each agent input:** `artifactRoot`, `findingPath` = `checkpoints/attack-<id>.json`, `mapPath`, `scopeIndexPath`. Do not paste the finding or the map.
 
 **Allowed tools:** `Read`, `Glob`, `Grep`, `Write`, `Edit`, `Bash`, `mcp__sc-auditor__search_findings`, `mcp__sc-auditor__generate-foundry-poc`, `mcp__sc-auditor__run-echidna`, `mcp__sc-auditor__run-medusa`, `mcp__sc-auditor__run-halmos`
 
-**Each agent output:** Updated Finding JSON with `status` set to `"verified"`, `"judge_confirmed"`, `"candidate"`, or `"discarded"`, plus `da_verify`, `da_chain`, and `verification_notes`.
+**Each agent output:** receipt JSON. The checkpoint is the updated Finding with `status` set to `"verified"`, `"judge_confirmed"`, `"candidate"`, or `"discarded"`, plus `da_verify`, `da_chain`, `da_chain_summary`, `skeptic_verdict`, and `verification_notes`. Evidence fields from ATTACK are copied through, not shortened.
 
-**Output validation:** Output MUST contain keys: `skeptic_verdict`, `da_verify`, `da_chain_summary`.
+**Output validation:** The checkpoint file MUST contain keys: `skeptic_verdict`, `da_verify`, `da_chain_summary`.
 
 **Benchmark gating:** In benchmark mode, any HIGH/MEDIUM finding with `proof_type = "none"` gets `benchmark_mode_visible = false`.
 
@@ -370,7 +388,17 @@ After VERIFY completes, handle DA chain conflicts using the "prove it or lose it
 
 ## Phase 6: REPORT (Inline)
 
-Generate the final structured report from collected results. Five sections:
+Read `skills/security-auditor/assets/references/findings-index.md` now (not before). Write the primary report first, then extract the index from it.
+
+1. The full report to `<artifactRoot>/report.md` (five sections below, complete evidence, no truncation). Each indexed finding uses the heading `### local-NNN: <title>`.
+2. The phase timeline to `<artifactRoot>/audit.log`.
+3. One YAML file, `<artifactRoot>/findings-index.yaml`, schema `whitehexlabs.audit-findings-index/v1`. Top-level keys are exactly `schema`, `run_id`, `step`, `coverage`, `findings`. Copy `run_id` and `step` from the execution prompt. Evidence `artifact_id` is only `primary-report`. Do not write a JSON index.
+
+Write no index when `run_id` or `step` is missing, or when a required finding field cannot be copied from the report without guessing. An empty `findings` list is only for a report that states zero findings. Discarded items stay in the report and are not indexed.
+
+Reload findings from `checkpoints/verify-*.json` and `checkpoints/attack-*.json`. Do not use chat copies. Then return only the note from that reference, at most 1600 characters. If there is no index, the note says the finding count is unknown. Do not paste the report, the index, or the log into chat.
+
+Generate the report from the checkpoint files. Five sections:
 
 1. **Proved Findings**: All findings with `status = "verified"` AND a successful proof (`proof_type != "none"`). In benchmark mode, only those with `benchmark_mode_visible = true`.
 2. **Confirmed (Unproven)**: Findings with `status = "judge_confirmed"` or `status = "verified"` but `proof_type = "none"`. Strong evidence but no executable proof.

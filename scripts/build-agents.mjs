@@ -24,6 +24,8 @@ const OUT_DIR = join(ROOT, ".agents", "skills", "security-auditor");
 const TOOL_PREFIX = "mcp__sc-auditor__";
 const SKILLS_PROMPT_PATH = "skills/security-auditor/assets/prompts/";
 const AGENTS_PROMPT_PATH = ".agents/skills/security-auditor/assets/prompts/";
+const SKILLS_REF_PATH = "skills/security-auditor/assets/references/";
+const AGENTS_REF_PATH = ".agents/skills/security-auditor/assets/references/";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -43,6 +45,9 @@ function transformMd(content, { isSkillMd = false } = {}) {
 
   // 2. Rewrite skills/security-auditor/assets/prompts/ → .agents/...
   out = out.replaceAll(SKILLS_PROMPT_PATH, AGENTS_PROMPT_PATH);
+
+  // 2b. Rewrite reference paths the same way (loaded on demand, not eager).
+  out = out.replaceAll(SKILLS_REF_PATH, AGENTS_REF_PATH);
 
   // 3. SKILL.md-only: standalone `assets/prompts/da-protocol.md` ref
   //    (appears in Core Protocols section, not prefixed with skills/...)
@@ -122,6 +127,17 @@ function build() {
     stats.transformed++;
   }
 
+  // 3b. Copy + transform on-demand references
+  const refsSrc = join(SKILLS_DIR, "assets", "references");
+  const refsDest = join(OUT_DIR, "assets", "references");
+  if (existsSync(refsSrc)) {
+    mkdirSync(refsDest, { recursive: true });
+    for (const f of listMdFiles(refsSrc)) {
+      writeFileSync(join(refsDest, f), transformMd(read(join(refsSrc, f))));
+      stats.transformed++;
+    }
+  }
+
   // 4. Copy verbatim: attack-vectors, hard-negatives
   stats.copied += copyVerbatim(
     join(SKILLS_DIR, "assets", "attack-vectors"),
@@ -154,7 +170,9 @@ function build() {
   // 7. Validate: all prompt paths in SKILL.md point to existing files
   const skillOut = read(join(OUT_DIR, "SKILL.md"));
   const pathRefs = [
-    ...skillOut.matchAll(/`(\.agents\/skills\/security-auditor\/assets\/prompts\/[^`]+)`/g),
+    ...skillOut.matchAll(
+      /`(\.agents\/skills\/security-auditor\/assets\/(?:prompts|references)\/[^`]+)`/g,
+    ),
   ];
   for (const [, relPath] of pathRefs) {
     const absPath = join(ROOT, relPath);

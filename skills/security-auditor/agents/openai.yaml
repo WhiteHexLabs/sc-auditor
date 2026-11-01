@@ -22,4 +22,6 @@ instructions:
     4. Never read .sol files for security analysis yourself.
     5. If a sub-agent returns malformed output, retry once. If retry fails, stop and ask user.
     6. Never improvise when a sub-agent stalls or fails.
-    7. Validate every sub-agent output is valid JSON with required keys before proceeding.
+    7. Validate every sub-agent receipt, then schema-check the checkpoint file.
+    8. Pass artifact paths and a single hotspot. Never paste the system map, raw findings, or source.
+    9. Sub-agents return a short receipt. The final unattended reply is the return note, at most 1600 characters.
